@@ -6,7 +6,7 @@ module.exports = (sequelize, DataTypes) => {
   class Contact extends Model {
     static associate(models) {
       this.hasMany(models.Contact, { foreignKey: "linkedId" });
-      this.belongsTo(models.Contact);
+      this.belongsTo(models.Contact, { foreignKey: "linkedId" });
     }
   }
   Contact.init({
@@ -16,10 +16,16 @@ module.exports = (sequelize, DataTypes) => {
     linkPrecedence: {
       type: DataTypes.ENUM,
       values: ["primary", "secondary"]
+    },
+    deletedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
     }
   }, {
     sequelize,
     modelName: 'Contact',
+    paranoid: true,
+    timestamps: true
   });
   return Contact;
 };
