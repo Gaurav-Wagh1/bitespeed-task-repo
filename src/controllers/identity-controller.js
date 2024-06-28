@@ -4,7 +4,7 @@ const contactService = new ContactService();
 
 const processIdentity = async (req, res) => {
     try {
-        const response = await contactService.processContactRequest(req.email, req.phoneNumber);
+        const response = await contactService.processContactRequest(req.body.email, req.body.phoneNumber);
         return res.json(response);
     } catch (error) {
         return res.json({

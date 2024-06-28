@@ -3,6 +3,6 @@ const { processIdentity } = require("../controllers/identity-controller");
 const express = require("express");
 const router = express.Router();
 
-router.get("/identity", processIdentity);
+router.post("/identity", processIdentity);
 
 module.exports = router;
