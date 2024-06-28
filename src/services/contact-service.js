@@ -32,8 +32,16 @@ class ContactService {
 
         // case - email and phone both are matching, no need to create row in table;
         const foundContacts = contacts.filter(contact => contact.email == email && contact.phoneNumber == phoneNumber);
-        if (!foundContacts.length) {
-            //
+        if (foundContacts.length) {
+            const recursiveResponse = await this.processRecursiveCalls(email, "email");
+            return {
+                "contact": {
+                    "primaryContactId": recursiveResponse.filter(resp => resp.linkPrecedence == "primary").map(resp => resp.id),
+                    "emails": recursiveResponse.map(resp => resp.email).filter((value, index, self) => self.indexOf(value) === index),
+                    "phoneNumbers": recursiveResponse.map(resp => resp.phoneNumber).filter((value, index, self) => self.indexOf(value) === index),
+                    "secondaryContactIds": recursiveResponse.filter(resp => resp.linkPrecedence == "secondary").map(resp => resp.id)
+                }
+            };
         }
 
 
@@ -87,7 +95,7 @@ class ContactService {
         }));
 
         const flattenedDataToAdd = dataToAdd.flat();
-        
+
         return [...output, ...flattenedDataToAdd];
     }
 };
