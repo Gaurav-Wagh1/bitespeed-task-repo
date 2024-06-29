@@ -1,5 +1,5 @@
 const { Contact } = require("../models/index");
-const { Op } = require("sequelize");
+const { Op, where } = require("sequelize");
 
 class ContactRepository {
 
@@ -20,6 +20,19 @@ class ContactRepository {
                 where: filter
             });
             return response;
+        } catch (error) {
+            console.log("Error at repository layer", error);
+            throw (error);
+        }
+    }
+
+    async updateContact(id, data) {
+        try {
+            await Contact.update(data, {
+                where: {
+                    id
+                }
+            });
         } catch (error) {
             console.log("Error at repository layer", error);
             throw (error);

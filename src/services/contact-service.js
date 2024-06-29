@@ -13,7 +13,7 @@ class ContactService {
 
         // first case - no match found
         // for this case, first create the contact then return it;
-        if (!contacts.length) {
+        if (!contacts.length && (email && phoneNumber)) {
             const contact = await this.contactRepository.createContact({
                 phoneNumber,
                 email,
@@ -34,31 +34,37 @@ class ContactService {
         const foundContacts = contacts.filter(contact => contact.email == email && contact.phoneNumber == phoneNumber);
         if (foundContacts.length) {
             const recursiveResponse = await this.processRecursiveCalls(email, "email");
-            return {
-                "contact": {
-                    "primaryContactId": recursiveResponse.filter(resp => resp.linkPrecedence == "primary").map(resp => resp.id),
-                    "emails": recursiveResponse.map(resp => resp.email).filter((value, index, self) => self.indexOf(value) === index),
-                    "phoneNumbers": recursiveResponse.map(resp => resp.phoneNumber).filter((value, index, self) => self.indexOf(value) === index),
-                    "secondaryContactIds": recursiveResponse.filter(resp => resp.linkPrecedence == "secondary").map(resp => resp.id)
-                }
-            };
+            // return {
+            //     "contact": {
+            //         "primaryContactId": recursiveResponse.filter(resp => resp.linkPrecedence == "primary").map(resp => resp.id),
+            //         "emails": recursiveResponse.map(resp => resp.email).filter((value, index, self) => self.indexOf(value) === index),
+            //         "phoneNumbers": recursiveResponse.map(resp => resp.phoneNumber).filter((value, index, self) => self.indexOf(value) === index),
+            //         "secondaryContactIds": recursiveResponse.filter(resp => resp.linkPrecedence == "secondary").map(resp => resp.id)
+            //     }
+            // };
+            return this.#returnData(recursiveResponse);
         }
-
 
         // case - other
         const primaryContact = contacts.filter(contact => contact.linkPrecedence == "primary");
 
         if (email && phoneNumber) {
-            await this.contactRepository.createContact({
-                phoneNumber,
-                email,
-                linkedId: primaryContact[0].id,
-                linkPrecedence: "secondary"
-            });
-
-            contacts = await this.contactRepository.getContact({
-                [Op.or]: [{ email: email }, { phoneNumber: phoneNumber }]
-            });
+            if (primaryContact.length == 1) {
+                await this.contactRepository.createContact({
+                    phoneNumber,
+                    email,
+                    linkedId: primaryContact[0].id,
+                    linkPrecedence: "secondary"
+                });
+            }
+            else {
+                const sortedPrimaryContacts = primaryContact.sort((a, b) => a.id - b.id);
+                const firstPrimaryContact = sortedPrimaryContacts[0];
+                const secondPrimaryContact = sortedPrimaryContacts[1];
+                await this.contactRepository.updateContact(secondPrimaryContact.id, { linkedId: firstPrimaryContact.id, linkPrecedence: "secondary" });
+            }
+            const recursiveResponse = await this.processRecursiveCalls(email, "email");
+            return this.#returnData(recursiveResponse);
         }
         else {
             let recursiveResponse;
@@ -68,7 +74,7 @@ class ContactService {
             else {
                 recursiveResponse = await this.processRecursiveCalls(phoneNumber, "phoneNumber");
             }
-            return recursiveResponse;
+            return this.#returnData(recursiveResponse);
         }
     }
 
@@ -97,6 +103,17 @@ class ContactService {
         const flattenedDataToAdd = dataToAdd.flat();
 
         return [...output, ...flattenedDataToAdd];
+    }
+
+    #returnData(recursiveResponse) {
+        return {
+            "contact": {
+                "primaryContactId": recursiveResponse.filter(resp => resp.linkPrecedence == "primary").map(resp => resp.id),
+                "emails": recursiveResponse.sort((a, b) => a.id - b.id).map(resp => resp.email).filter((value, index, self) => self.indexOf(value) === index),
+                "phoneNumbers": recursiveResponse.sort((a, b) => a.id - b.id).map(resp => resp.phoneNumber).filter((value, index, self) => self.indexOf(value) === index),
+                "secondaryContactIds": recursiveResponse.sort((a, b) => a.id - b.id).filter(resp => resp.linkPrecedence == "secondary").map(resp => resp.id)
+            }
+        }
     }
 };
 
