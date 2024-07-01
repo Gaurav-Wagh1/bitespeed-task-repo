@@ -6,13 +6,14 @@ class ContactService {
         this.contactRepository = new ContactRepository();
     }
 
-    async processContactRequest(email, phoneNumber) {
-        let contacts = await this.contactRepository.getContact({
+    //---------------------------------------- Method (Main) - Main method to process request;
+    async processContactRequest(email = "", phoneNumber = "") {
+
+        let contacts = await this.contactRepository.getContact({        // find contacts with given email and phoneNumber;
             [Op.or]: [{ email: email }, { phoneNumber: phoneNumber }]
         });
 
-        // first case - no match found
-        // for this case, first create the contact then return it;
+        //---------------------------------------- Case - no match found, primary contact will be created;
         if (!contacts.length && (email && phoneNumber)) {
             const contact = await this.contactRepository.createContact({
                 phoneNumber,
@@ -30,90 +31,112 @@ class ContactService {
             };
         }
 
-        // case - email and phone both are matching, no need to create row in table;
-        const foundContacts = contacts.filter(contact => contact.email == email && contact.phoneNumber == phoneNumber);
-        if (foundContacts.length) {
-            const recursiveResponse = await this.processRecursiveCalls(email, "email");
-            // return {
-            //     "contact": {
-            //         "primaryContactId": recursiveResponse.filter(resp => resp.linkPrecedence == "primary").map(resp => resp.id),
-            //         "emails": recursiveResponse.map(resp => resp.email).filter((value, index, self) => self.indexOf(value) === index),
-            //         "phoneNumbers": recursiveResponse.map(resp => resp.phoneNumber).filter((value, index, self) => self.indexOf(value) === index),
-            //         "secondaryContactIds": recursiveResponse.filter(resp => resp.linkPrecedence == "secondary").map(resp => resp.id)
-            //     }
-            // };
-            return this.#returnData(recursiveResponse);
+        //---------------------------------------- Case - No match found and only email or phoneNumber is given, no need to create contact due to insufficient data;
+        if (!contacts.length && (email || phoneNumber)) {
+            return {
+                "contact": {
+                    "primaryContactId": null,
+                    "emails": [],
+                    "phoneNumbers": [],
+                    "secondaryContactIds": []
+                }
+            };
         }
 
-        // case - other
-        const primaryContact = contacts.filter(contact => contact.linkPrecedence == "primary");
+        //---------------------------------------- Case - Email and phone both are matching, no need to create contact in table;
+        const foundContacts = contacts.filter(contact => contact.email == email && contact.phoneNumber == phoneNumber);
 
+        if (foundContacts.length) {
+            return this.#returnData(await this.#fetchData(email, "email"));
+        }
+
+        //---------------------------------------- Case - Both email and phoneNumber are valid;
         if (email && phoneNumber) {
-            if (primaryContact.length == 1) {
+            const contactsFoundThroughEmail = contacts.filter(contact => contact.email == email);
+            const contactsFoundThroughPhone = contacts.filter(contact => contact.phoneNumber == phoneNumber);
+
+            //---------------------------------------- Sub-case - primary contact turn into secondary;
+            if (contactsFoundThroughEmail.length && contactsFoundThroughPhone.length) {
+                const primaryContactThroughEmail = await this.#findPrimaryContact(contactsFoundThroughEmail);
+                const primaryContactThroughPhone = await this.#findPrimaryContact(contactsFoundThroughPhone);
+
+                const firstPrimaryContact = primaryContactThroughEmail.id < primaryContactThroughPhone.id ? primaryContactThroughEmail : primaryContactThroughPhone;
+                const secondPrimaryContact = primaryContactThroughEmail.id > primaryContactThroughPhone.id ? primaryContactThroughEmail : primaryContactThroughPhone;
+
+                //---------------------------------------- Sub-case - already primary contact converted into secondary, no need to do it again;
+                if (firstPrimaryContact == secondPrimaryContact) {
+                    return this.#returnData(await this.#fetchData(firstPrimaryContact.email, "email"));
+                }
+
+                //---------------------------------------- Sub-case - conversion into secondary;
+                const secondaryContacts = await this.contactRepository.getSecondaryContacts(secondPrimaryContact);
+
+                await Promise.all([secondPrimaryContact, ...secondaryContacts].map(async contact => {
+                    return this.contactRepository.updateContact(contact.id,
+                        { linkedId: firstPrimaryContact.id, linkPrecedence: "secondary" }
+                    );;
+                }));
+
+                return this.#returnData(await this.#fetchData(firstPrimaryContact.email, "email"));
+            }//---------------------------------------- Sub-case - creation of secondary contact;
+            else {
+                const validRequestField = contactsFoundThroughEmail.length ? "email" : "phoneNumber";
+                const primaryContact = validRequestField == "email"
+                    ? await this.#findPrimaryContact(contactsFoundThroughEmail)
+                    : await this.#findPrimaryContact(contactsFoundThroughPhone);
+
                 await this.contactRepository.createContact({
                     phoneNumber,
                     email,
-                    linkedId: primaryContact[0].id,
+                    linkedId: primaryContact.id,
                     linkPrecedence: "secondary"
                 });
+
+                return this.#returnData(await this.#fetchData(primaryContact.email, "email"));
             }
-            else {
-                const sortedPrimaryContacts = primaryContact.sort((a, b) => a.id - b.id);
-                const firstPrimaryContact = sortedPrimaryContacts[0];
-                const secondPrimaryContact = sortedPrimaryContacts[1];
-                await this.contactRepository.updateContact(secondPrimaryContact.id, { linkedId: firstPrimaryContact.id, linkPrecedence: "secondary" });
-            }
-            const recursiveResponse = await this.processRecursiveCalls(email, "email");
-            return this.#returnData(recursiveResponse);
-        }
+        }//---------------------------------------- Case - Email or phoneNumber is valid, just return their respective contacts;
         else {
-            let recursiveResponse;
-            if (email) {
-                recursiveResponse = await this.processRecursiveCalls(email, "email");
-            }
-            else {
-                recursiveResponse = await this.processRecursiveCalls(phoneNumber, "phoneNumber");
-            }
-            return this.#returnData(recursiveResponse);
+            return email ? this.#returnData(await this.#fetchData(email, "email")) : this.#returnData(await this.#fetchData(phoneNumber, "phoneNumber"));
         }
     }
 
-    async processRecursiveCalls(data, fieldType, dataField = "") {
-        const responses = await this.contactRepository.getContact({ [fieldType]: data });
+    //---------------------------------------- Method - Fetch primary contact and all its secondary contacts;
+    async #fetchData(field, fieldType) {
+        const fieldObjs = await this.contactRepository.getContact({         // fetch contacts based on given email / phoneNumber;
+            [fieldType]: field
+        });
 
-        let output;
-        if (fieldType == "phoneNumber") {
-            output = responses.filter(respo => respo.email != dataField);
-        }
-        else {
-            output = responses.filter(respo => respo.phoneNumber != dataField);
-        }
+        const primaryContact = await this.#findPrimaryContact(fieldObjs);   // find primary contact of given array of contacts;
 
-        if (output.length == 0) {
-            return [];
-        }
+        const secondaryContacts = await this.contactRepository.getSecondaryContacts(primaryContact);         // finding all secondary contacts from primary contact; 
 
-        const dataToAdd = await Promise.all(output.map(async op => {
-            return this.processRecursiveCalls(fieldType == "email" ? op.phoneNumber : op.email,
-                fieldType == "email" ? "phoneNumber" : "email",
-                data
-            );
-        }));
-
-        const flattenedDataToAdd = dataToAdd.flat();
-
-        return [...output, ...flattenedDataToAdd];
+        return { primaryContact, secondaryContacts }
     }
 
-    #returnData(recursiveResponse) {
+    //---------------------------------------- Method (Private) - Return data in proper format;
+    #returnData({ primaryContact, secondaryContacts }) {
         return {
             "contact": {
-                "primaryContactId": recursiveResponse.filter(resp => resp.linkPrecedence == "primary").map(resp => resp.id),
-                "emails": recursiveResponse.sort((a, b) => a.id - b.id).map(resp => resp.email).filter((value, index, self) => self.indexOf(value) === index),
-                "phoneNumbers": recursiveResponse.sort((a, b) => a.id - b.id).map(resp => resp.phoneNumber).filter((value, index, self) => self.indexOf(value) === index),
-                "secondaryContactIds": recursiveResponse.sort((a, b) => a.id - b.id).filter(resp => resp.linkPrecedence == "secondary").map(resp => resp.id)
+                "primaryContactId": primaryContact.id,
+                "emails": [primaryContact.email, ...secondaryContacts.map(contact => contact.email)].filter((value, index, self) => self.indexOf(value) === index),
+                "phoneNumbers": [primaryContact.phoneNumber, ...secondaryContacts.map(contact => contact.phoneNumber)].filter((value, index, self) => self.indexOf(value) === index),
+                "secondaryContactIds": secondaryContacts.map(contact => contact.id)
             }
         }
+    }
+
+    //---------------------------------------- Method (Private) - Find our primary contact of contacts given in array;
+    async #findPrimaryContact(arrayOfContacts) {
+        let primaryContact = arrayOfContacts.filter(contact => contact.linkPrecedence == "primary");      // find primary contact from fetched contacts;
+
+        if (primaryContact.length == 0) {                                    // if no primary contact found in fetched contacts,
+            primaryContact = await this.contactRepository.getPrimaryContact(arrayOfContacts[0]);               // find it by using any secondary contact;
+        }
+        else {
+            primaryContact = primaryContact[0];                             // if primary contact found in fetched contacts, 
+        }                                                                   // get its object from array using index;
+
+        return primaryContact;
     }
 };
 
